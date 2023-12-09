@@ -10,53 +10,13 @@ from langchain.chains import LLMChain
 from transformers import Wav2Vec2ForCTC, Wav2Vec2Tokenizer
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
 from langchain.llms import HuggingFacePipeline
+from htmlTemplates import css, bot_template, user_template
 
-flanModel = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-small")
-flanTokenizer = AutoTokenizer.from_pretrained("google/flan-t5-small")
 
-pipeline = pipeline(
-    "text2text-generation",
-    model=flanModel, 
-    tokenizer=flanTokenizer, 
-    max_length=128
-)
-
-local_llm = HuggingFacePipeline(pipeline=pipeline)
-
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-
-tokenizer = Wav2Vec2Tokenizer.from_pretrained("facebook/wav2vec2-base-960h")
-model = Wav2Vec2ForCTC.from_pretrained("facebook/wav2vec2-base-960h")
-
-st.write("""
-# MY ANSWER TO GEMINI
-### Multi Modality BOT
-""")
-uploaded_file = st.file_uploader("Choose a file")
-extension  = 'unknown'
-parsedData = ''
-if uploaded_file is not None:
-    bytes_data = uploaded_file.getvalue()
     
-    if(uploaded_file.name.endswith('txt')):
-        extension = 'txt'
-        st.session_state["preview"] = "Its a text"
-    elif (uploaded_file.name.endswith('wav')):
-        extension = 'audio'
-        st.session_state["preview"] = "Its an audio"
-    elif (uploaded_file.name.endswith('mp4')):
-        extension = 'video'
-        st.session_state["preview"] = "Its a video"
-    elif (uploaded_file.name.endswith('jpg')):
-        extension = 'img'
-        st.session_state["preview"] = "Its an image"
-    else:
-        print("Unsupported media type")
-        st.session_state["preview"] += "Its an Unsupported media type"
-    
-preview = st.text_area("File Preview", "", height=150, key="preview")
-upload_state = st.text_area("Upload State", "", key="upload_state")
-predict_state = st.text_area("Predict State", "", key="predict_state")
+#preview = st.text_area("File Preview", "", height=150, key="preview")
+#upload_state = st.text_area("Upload State", "", key="upload_state")
+#predict_state = st.text_area("Predict State", "", key="predict_state")
 
 def write_bytesio_to_file(filename, bytesio):
     """
@@ -68,7 +28,7 @@ def write_bytesio_to_file(filename, bytesio):
         # Copy the BytesIO stream to the output file
         outfile.write(bytesio)
 
-def handleInput(data, extension):
+def handleInput(data, extension,tokenizer, model):
     extractedText = ''
     if extension == 'txt':
         extractedText = data.decode('utf-8')
@@ -110,7 +70,8 @@ def handleInput(data, extension):
                 #x1,y1,w1,h1 = 0,0,imgH,imgW
                 
                 imgchar = pytesseract.image_to_string(frame)
-                extractedText = extractedText + ' ' + imgchar
+                print(imgchar.strip())
+                extractedText = extractedText.strip() + ' ' + imgchar.strip()
                 
                 #imgboxes = pytesseract.image_to_boxes(frame)
                 
@@ -135,24 +96,91 @@ def handleInput(data, extension):
 
     return extractedText.strip()
 
-def upload():
+def display():
+    for (i, message) in enumerate(st.session_state.conversation):
+        if i % 2 == 0:
+            st.write(user_template.replace(
+                "{{MSG}}", message), unsafe_allow_html=True)
+        else:
+            st.write(bot_template.replace(
+                "{{MSG}}", message), unsafe_allow_html=True)
+            
+def upload(uploaded_file, extension, flanTokenizer, flanModel, tokenizer, model):
     
     if uploaded_file is None or extension == 'unknown':
         st.session_state["upload_state"] = "Upload a file first!"
     else:
         data = uploaded_file.getvalue()
-        parsedData = handleInput(data, extension)
+        parsedData = handleInput(data, extension, tokenizer, model)
 
-        st.session_state["upload_state"] = parsedData
-
-        template = """
-        Tell in 50 words about {title}
+        template = """ Give me 2 sentences in english about {}
         """
-        prompt = PromptTemplate.from_template(template)
-        chain = LLMChain(llm=local_llm, prompt=prompt)
-        output = chain.run(parsedData)
-        st.session_state["predict_state"] = output
+        inputs = flanTokenizer([template.format(parsedData)], return_tensors="pt", padding=True, truncation=True)
 
-st.button("Ask me something in any modality by uploading file", on_click=upload)
+        #prompt = PromptTemplate.from_template(template)
+        #chain = LLMChain(llm=local_llm, prompt=prompt)
+        sequences = flanModel.generate(
+            **inputs, do_sample=True, min_length=100, max_length=300, temperature=0.97, repetition_penalty=1.2
+        )
+        decoded = flanTokenizer.batch_decode(sequences, skip_special_tokens=True)
+        #output = chain.run(parsedData)
+        st.session_state.conversation.extend([parsedData, decoded[0]])
+        display()
+        
 
 
+def main():
+    flanModel = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-small")
+    flanTokenizer = AutoTokenizer.from_pretrained("google/flan-t5-small")
+
+    #pipeline = pipeline(
+    #    "text2text-generation",
+    #    model=flanModel, 
+    #    tokenizer=flanTokenizer, 
+    #    max_length=1024
+    #)
+
+    #local_llm = HuggingFacePipeline(pipeline=pipeline)
+
+    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
+    tokenizer = Wav2Vec2Tokenizer.from_pretrained("facebook/wav2vec2-base-960h")
+    model = Wav2Vec2ForCTC.from_pretrained("facebook/wav2vec2-base-960h")
+
+    st.set_page_config(page_title="MY ANSWER TO GEMINI",
+                        page_icon="🧊")
+    st.write("""
+    # MY ANSWER TO GEMINI
+    ### Multi Modality BOT
+    """)
+    st.write(css, unsafe_allow_html=True)
+    if "conversation" not in st.session_state:
+        st.session_state.conversation = []
+
+
+    uploaded_file = st.file_uploader("Choose a file")
+    extension  = 'unknown'
+    parsedData = ''
+    if uploaded_file is not None:
+        bytes_data = uploaded_file.getvalue()
+        
+        if(uploaded_file.name.endswith('txt')):
+            extension = 'txt'
+            st.session_state["preview"] = "Its a text"
+        elif (uploaded_file.name.endswith('wav')):
+            extension = 'audio'
+            st.session_state["preview"] = "Its an audio"
+        elif (uploaded_file.name.endswith('mp4')):
+            extension = 'video'
+            st.session_state["preview"] = "Its a video"
+        elif (uploaded_file.name.endswith('jpg')):
+            extension = 'img'
+            st.session_state["preview"] = "Its an image"
+        else:
+            print("Unsupported media type")
+            st.session_state["preview"] += "Its an Unsupported media type"
+
+    st.button("Ask me something in any modality by uploading file", on_click=upload(uploaded_file, extension, flanTokenizer, flanModel, tokenizer, model))
+
+if __name__ == '__main__':
+    main()
